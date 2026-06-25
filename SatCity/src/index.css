@@ -1,0 +1,96 @@
+@import "tailwindcss";
+
+@theme {
+  --color-primary: #0f766e;
+  --color-primary-foreground: #ffffff;
+  --color-accent: #0ea5e9;
+  --color-danger: #dc2626;
+  --color-warning: #f59e0b;
+  --color-success: #16a34a;
+  --color-info: #2563eb;
+  --color-muted: #64748b;
+  --color-border: #e2e8f0;
+  --color-card: #ffffff;
+  --color-background: #f8fafc;
+  --color-foreground: #0f172a;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  font-family: var(--font-sans);
+  background: var(--color-background);
+  color: var(--color-foreground);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Aceternity-like animated background grid */
+.bg-grid {
+  background-image:
+    linear-gradient(to right, rgba(15, 23, 42, 0.06) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(15, 23, 42, 0.06) 1px, transparent 1px);
+  background-size: 36px 36px;
+}
+
+.bg-dots {
+  background-image: radial-gradient(rgba(15, 23, 42, 0.12) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+/* Spotlight effect */
+.spotlight {
+  position: absolute;
+  pointer-events: none;
+  inset: 0;
+  background: radial-gradient(600px circle at var(--x, 50%) var(--y, 30%), rgba(14, 165, 233, 0.18), transparent 40%);
+}
+
+/* Moving border */
+@keyframes borderMove {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 200% 50%; }
+}
+.moving-border {
+  background: linear-gradient(90deg, #dc2626, #f59e0b, #dc2626, #f59e0b);
+  background-size: 200% 100%;
+  animation: borderMove 4s linear infinite;
+}
+
+/* Magnetic button subtle pulse */
+@keyframes pulseGlow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.45); }
+  50% { box-shadow: 0 0 0 18px rgba(220, 38, 38, 0); }
+}
+.pulse-glow { animation: pulseGlow 2s ease-out infinite; }
+
+/* Animated text reveal */
+@keyframes revealUp {
+  from { opacity: 0; transform: translateY(18px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.reveal-up { animation: revealUp 0.7s cubic-bezier(.2,.8,.2,1) both; }
+
+/* Card hover tilt */
+.tilt-card { transition: transform .35s cubic-bezier(.2,.8,.2,1), box-shadow .35s; }
+.tilt-card:hover { transform: translateY(-4px) rotateX(2deg); box-shadow: 0 25px 60px -20px rgba(15, 23, 42, 0.25); }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+/* Shadcn-like focus ring */
+.focus-ring:focus-visible {
+  outline: 2px solid #0f766e;
+  outline-offset: 2px;
+}
+
+/* Emergency banner glow */
+@keyframes bannerPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+.banner-pulse { animation: bannerPulse 1.4s ease-in-out infinite; }
