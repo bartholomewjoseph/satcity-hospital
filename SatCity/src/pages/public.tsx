@@ -419,13 +419,15 @@ export function PortalPickerPage() {
 
 // ============ Auth Page (unified but portal-aware) ============
 export function AuthPage({ portal }: { portal: "patient" | "staff" | "any" }) {
-  const { login, registerUser, users } = useHospital();
+  const { login, registerUser, users, departments } = useHospital();
   const navigate = useNavigate();
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [fullName, setFullName] = useState("");
   const [role, setRole] = useState<Role>(portal === "patient" ? "patient" : "doctor");
-  const [dept, setDept] = useState("d-cardio");
+  const [dept, setDept] = useState("");
   const [dob, setDob] = useState("");
   const [bloodType, setBloodType] = useState("O+");
   const [address, setAddress] = useState("");
@@ -436,9 +438,17 @@ export function AuthPage({ portal }: { portal: "patient" | "staff" | "any" }) {
   const isPatientPortal = portal === "patient";
   const isStaffPortal = portal === "staff";
 
+  useEffect(() => {
+    if (!dept && departments.length > 0) {
+      setDept(departments[0].id);
+    }
+  }, [departments, dept]);
+
+  const departmentOptions = departments;
+
   const demoAccounts = isStaffPortal
     ? [
-        { email: "super@satcity.com", label: "Super Admin" },
+        { email: "superadmin@satcity", label: "Super Admin", password: "admin@satcity!" },
         { email: "admin.cardio@satcity.com", label: "Cardiology Admin" },
         { email: "emeka@satcity.com", label: "Dr. Emeka (Cardiology)" },
         { email: "kemi@satcity.com", label: "Kemi (Lab Tech)" },
@@ -451,7 +461,7 @@ export function AuthPage({ portal }: { portal: "patient" | "staff" | "any" }) {
         { email: "adaora@example.com", label: "Adaora Okeke" },
       ]
     : [
-        { email: "super@satcity.com", label: "Super Admin" },
+        { email: "superadmin@satcity", label: "Super Admin", password: "admin@satcity!" },
         { email: "emeka@satcity.com", label: "Dr. Emeka" },
         { email: "chioma@example.com", label: "Chioma (Patient)" },
       ];
@@ -461,15 +471,17 @@ export function AuthPage({ portal }: { portal: "patient" | "staff" | "any" }) {
     setError("");
     setInfo("");
     if (mode === "login") {
-      const ok = await login(email);
+      const ok = await login(email, password);
       if (!ok) {
-        setError("Invalid email, account inactive, or you tried to log into the wrong portal.");
+        setError("Invalid email, password, or account inactive.");
         return;
       }
       navigate("/dashboard");
     } else {
-      if (!fullName || !email) { setError("Please fill all required fields."); return; }
+      if (!fullName || !email || !password) { setError("Please fill all required fields."); return; }
+      if (password !== confirmPassword) { setError("Passwords do not match."); return; }
       if (isPatientPortal && (!dob || !bloodType)) { setError("Date of birth and blood type are required."); return; }
+      if (isStaffPortal && role !== "pharmacist" && departments.length === 0) { setError("No departments are available yet. Please try again later."); return; }
 
       try {
         const newUser = await registerUser({
@@ -482,8 +494,7 @@ export function AuthPage({ portal }: { portal: "patient" | "staff" | "any" }) {
           blood_type: bloodType || undefined,
           emergency_contact: emergencyContact || undefined,
           address: address || undefined,
-        });
-
+        }, password);
         if (newUser.is_active) {
           navigate("/dashboard");
         } else {
@@ -551,6 +562,16 @@ export function AuthPage({ portal }: { portal: "patient" | "staff" | "any" }) {
               <Label htmlFor="em">Email</Label>
               <Input id="em" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder={isPatientPortal ? "you@example.com" : "you@satcity.com"} required />
             </div>
+            <div>
+              <Label htmlFor="pw">Password</Label>
+              <Input id="pw" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={mode === "login" ? "Enter your password" : "Create a password"} required />
+            </div>
+            {mode === "register" && (
+              <div>
+                <Label htmlFor="cpw">Confirm password</Label>
+                <Input id="cpw" type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder="Repeat password" required />
+              </div>
+            )}
             {mode === "register" && isPatientPortal && (
               <>
                 <div className="grid grid-cols-2 gap-3">
@@ -591,10 +612,11 @@ export function AuthPage({ portal }: { portal: "patient" | "staff" | "any" }) {
                   <div>
                     <Label htmlFor="dp">Department</Label>
                     <Select id="dp" value={dept} onChange={(e) => setDept(e.target.value)}>
-                      <option value="d-cardio">Cardiology</option>
-                      <option value="d-neuro">Neurology</option>
-                      <option value="d-peds">Pediatrics</option>
-                      <option value="d-ortho">Orthopedics</option>
+                      {departmentOptions.length > 0 ? departmentOptions.map((department) => (
+                        <option key={department.id} value={department.id}>{department.name}</option>
+                      )) : (
+                        <option value="">No departments available</option>
+                      )}
                     </Select>
                   </div>
                 )}
@@ -627,7 +649,10 @@ export function AuthPage({ portal }: { portal: "patient" | "staff" | "any" }) {
                   <button
                     key={d.email}
                     type="button"
-                    onClick={() => setEmail(d.email)}
+                    onClick={() => {
+                      setEmail(d.email);
+                      setPassword(d.password ?? "");
+                    }}
                     className="text-left text-xs px-3 py-2 rounded-md border border-neutral-200 hover:bg-neutral-50 cursor-pointer flex items-center justify-between"
                   >
                     <div>

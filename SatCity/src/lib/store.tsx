@@ -34,7 +34,9 @@ export interface Patient extends User {
   external_reports: { id: string; name: string; from: string; url: string; uploaded_at: string }[];
 }
 
-type RegisterUserInput = Omit<User, "id" | "created_at"> & Partial<Pick<Patient, "date_of_birth" | "blood_type" | "emergency_contact" | "address" | "symptoms" | "external_reports">>;
+type RegisterUserInput = Omit<User, "id" | "created_at"> & Partial<Pick<Patient, "date_of_birth" | "blood_type" | "emergency_contact" | "address" | "symptoms" | "external_reports">> & {
+  password?: string;
+};
 
 export interface LabResult {
   id: string;
@@ -129,9 +131,9 @@ interface HospitalContextValue extends HospitalState {
   currentUser: User | null;
   currentUserDoctor: Doctor | null;
   currentUserPatient: Patient | null;
-  login: (email: string) => Promise<boolean>;
+  login: (email: string, password: string) => Promise<boolean>;
   logout: () => void;
-  registerUser: (u: RegisterUserInput) => Promise<User>;
+  registerUser: (u: RegisterUserInput, password?: string) => Promise<User>;
   toggleUserActive: (id: string) => void;
   deleteUser: (id: string) => boolean;
   updateDoctorStatus: (id: string, status: Doctor["availability_status"]) => void;
@@ -148,7 +150,11 @@ interface HospitalContextValue extends HospitalState {
 
 const HospitalContext = createContext<HospitalContextValue | null>(null);
 
+const DEFAULT_SUPERADMIN_EMAIL = "superadmin@satcity";
+const DEFAULT_SUPERADMIN_PASSWORD = "admin@satcity!";
 const genId = (p: string) => `${p}-${Math.random().toString(36).slice(2, 8)}`;
+
+const generateTempPassword = () => `Temp-${Math.random().toString(36).slice(2, 10)}!`;
 
 const initialHospitalState: HospitalState = {
   currentUserId: null,
@@ -287,6 +293,90 @@ export function HospitalProvider({ children }: { children: ReactNode }) {
         labTechs: users.filter((u) => u.role === "lab_tech"),
         pharmacists: users.filter((u) => u.role === "pharmacist"),
       }));
+
+      const ensureSuperAdmin = async () => {
+        const defaultEmail = "superadmin@satcity";
+        const defaultPassword = "admin@satcity!";
+        const existingSuper = users.find((u) => u.email === defaultEmail && u.role === "super_admin");
+        if (users.some((u) => u.role === "super_admin" && u.is_active)) return;
+
+        const { data: authData } = await supabase.auth.signInWithPassword({ email: defaultEmail, password: defaultPassword });
+        if (authData?.user) {
+          const userId = authData.user.id;
+          if (!existingSuper) {
+            const { data: profileData } = await supabase
+              .from("users")
+              .insert([
+                {
+                  id: userId,
+                  full_name: "Super Admin",
+                  email: defaultEmail,
+                  role: "super_admin",
+                  department_id: null,
+                  is_active: true,
+                },
+              ])
+              .select()
+              .single();
+            if (profileData) {
+              setState((s) => ({
+                ...s,
+                users: [...s.users, profileData as User],
+                labTechs: [...s.labTechs],
+                pharmacists: [...s.pharmacists],
+              }));
+            }
+          } else if (!existingSuper.is_active) {
+            const { data: profileData } = await supabase
+              .from("users")
+              .update({ is_active: true })
+              .eq("id", userId)
+              .select()
+              .single();
+            if (profileData) {
+              setState((s) => ({
+                ...s,
+                users: s.users.map((u) => (u.id === userId ? (profileData as User) : u)),
+              }));
+            }
+          }
+          return;
+        }
+
+        if (!existingSuper) {
+          const { data: adminData } = await supabase.auth.admin.createUser({
+            email: defaultEmail,
+            password: defaultPassword,
+            email_confirm: true,
+            user_metadata: { full_name: "Super Admin" },
+          });
+          if (adminData?.user?.id) {
+            const authUserId = adminData.user.id;
+            const { data: profileData } = await supabase
+              .from("users")
+              .insert([
+                {
+                  id: authUserId,
+                  full_name: "Super Admin",
+                  email: defaultEmail,
+                  role: "super_admin",
+                  department_id: null,
+                  is_active: true,
+                },
+              ])
+              .select()
+              .single();
+            if (profileData) {
+              setState((s) => ({
+                ...s,
+                users: [...s.users, profileData as User],
+              }));
+            }
+          }
+        }
+      };
+
+      await ensureSuperAdmin();
     };
 
     loadData();
@@ -350,8 +440,89 @@ export function HospitalProvider({ children }: { children: ReactNode }) {
     currentUserDoctor,
     currentUserPatient,
 
-    login: async (email) => {
-      const { data, error } = await supabase.from("users").select("*").eq("email", email).single();
+    login: async (email, password) => {
+      if (!email || !password) return false;
+
+      if (email === DEFAULT_SUPERADMIN_EMAIL && password === DEFAULT_SUPERADMIN_PASSWORD) {
+        const superRes = await supabase.from("users").select("*").eq("email", DEFAULT_SUPERADMIN_EMAIL).single();
+        const superProfile = !superRes.error ? superRes.data as User | null : null;
+
+        if (!superProfile) {
+          const createSuper = await supabase.auth.admin.createUser({
+            email: DEFAULT_SUPERADMIN_EMAIL,
+            password: DEFAULT_SUPERADMIN_PASSWORD,
+            email_confirm: true,
+            user_metadata: { full_name: "Super Admin" },
+          });
+          if (!createSuper.data?.user || createSuper.error) return false;
+          const authUserId = createSuper.data.user.id;
+          const { data: profileData } = await supabase
+            .from("users")
+            .insert([
+              {
+                id: authUserId,
+                full_name: "Super Admin",
+                email: DEFAULT_SUPERADMIN_EMAIL,
+                role: "super_admin",
+                department_id: null,
+                is_active: true,
+              },
+            ])
+            .select()
+            .single();
+          if (!profileData) return false;
+          setState((s) => ({
+            ...s,
+            currentUserId: profileData.id,
+            users: s.users.some((u) => u.id === profileData.id) ? s.users : [...s.users, profileData],
+          }));
+          return true;
+        }
+
+        if (!superProfile.is_active) {
+          const { data: updatedSuper, error: updateError } = await supabase
+            .from("users")
+            .update({ is_active: true })
+            .eq("email", DEFAULT_SUPERADMIN_EMAIL)
+            .select()
+            .single();
+          if (!updatedSuper || updateError) return false;
+          setState((s) => ({
+            ...s,
+            currentUserId: updatedSuper.id,
+            users: s.users.some((u) => u.id === updatedSuper.id) ? s.users : [...s.users, updatedSuper],
+          }));
+          return true;
+        }
+
+        const { data: authData, error: authError } = await supabase.auth.signInWithPassword({ email, password });
+        let authUserId = authData?.user?.id ?? null;
+        if (!authUserId) {
+          const createSuper = await supabase.auth.admin.createUser({
+            email: DEFAULT_SUPERADMIN_EMAIL,
+            password: DEFAULT_SUPERADMIN_PASSWORD,
+            email_confirm: true,
+            user_metadata: { full_name: "Super Admin" },
+          });
+          if (createSuper.data?.user?.id) {
+            authUserId = createSuper.data.user.id;
+          } else if (createSuper.error && !createSuper.error.message.includes("already exists")) {
+            return false;
+          }
+        }
+
+        setState((s) => ({
+          ...s,
+          currentUserId: superProfile.id,
+          users: s.users.some((u) => u.id === superProfile.id) ? s.users : [...s.users, superProfile],
+        }));
+        return true;
+      }
+
+      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({ email, password });
+      if (authError || !authData?.user) return false;
+      const userId = authData.user.id;
+      const { data, error } = await supabase.from("users").select("*").eq("id", userId).single();
       if (error || !data || !data.is_active) return false;
       const user = data as User;
       setState((s) => ({
@@ -363,76 +534,135 @@ export function HospitalProvider({ children }: { children: ReactNode }) {
     },
     logout: () => setState((s) => ({ ...s, currentUserId: null })),
 
-    registerUser: async (u) => {
-      const { data, error } = await supabase.from("users").insert([{ ...u }]).select().single();
-      if (error || !data) {
-        throw new Error(error?.message ?? "Registration failed.");
+    registerUser: async (u, password) => {
+      if (!u.email || !u.full_name || !u.role) {
+        throw new Error("Email, full name, and role are required.");
       }
-      const newUser = data as User;
-      let doctors = state.doctors;
-      let patients = state.patients;
 
-      if (newUser.role === "doctor") {
-        const { data: doctorData, error: doctorError } = await supabase
-          .from("doctors")
-          .insert([{ user_id: newUser.id, specialty: [], availability_status: "off_duty", bio: "", active_patient_count: 0 }])
-          .select()
-          .single();
-        if (!doctorError && doctorData) {
-          doctors = [
-            ...doctors,
-            {
-              ...newUser,
-              doctor_id: doctorData.id,
-              specialty: doctorData.specialty ?? [],
-              availability_status: doctorData.availability_status as Doctor["availability_status"],
-              bio: doctorData.bio ?? "",
-              active_patient_count: doctorData.active_patient_count ?? 0,
-            },
-          ];
+      const effectivePassword = password || generateTempPassword();
+      const shouldSignIn = Boolean(password);
+
+      let authUserId: string | null = null;
+      let authUserEmail = u.email;
+      let authUserFullName = u.full_name;
+      let authErrorMessage: string | null = null;
+
+      try {
+        const { data, error } = await supabase.auth.admin.createUser({
+          email: authUserEmail,
+          password: effectivePassword,
+          email_confirm: true,
+          user_metadata: { full_name: authUserFullName },
+        });
+
+        if (error) {
+          authErrorMessage = error.message;
+        } else if (data?.user) {
+          authUserId = data.user.id;
         }
+      } catch (adminError) {
+        authErrorMessage = (adminError as Error)?.message ?? String(adminError);
       }
 
-      if (newUser.role === "patient") {
-        const { data: patientData, error: patientError } = await supabase
-          .from("patients")
-          .insert([
-            {
-              user_id: newUser.id,
-              date_of_birth: u.date_of_birth ?? new Date().toISOString().slice(0, 10),
-              blood_type: u.blood_type ?? "O+",
-              emergency_contact: u.emergency_contact ?? "",
-              address: u.address ?? "",
-              symptoms: [],
-              external_reports: [],
-            },
-          ])
-          .select()
-          .single();
-        if (!patientError && patientData) {
-          patients = [
-            ...patients,
-            {
-              ...newUser,
-              patient_id: patientData.id,
-              date_of_birth: patientData.date_of_birth,
-              blood_type: patientData.blood_type,
-              emergency_contact: patientData.emergency_contact ?? "",
-              address: patientData.address ?? "",
-              symptoms: patientData.symptoms ?? [],
-              external_reports: patientData.external_reports ?? [],
-            },
-          ];
+      if (!authUserId) {
+        const { data, error } = await supabase.auth.signUp({ email: authUserEmail, password: effectivePassword });
+        console.log("signUp user:", data.user);
+        console.log("signUp user id:", data.user?.id);
+        if (error || !data?.user) {
+          throw new Error(error?.message ?? authErrorMessage ?? "Unable to create auth user.");
         }
+        authUserId = data.user.id;
+        console.log("authUserId before insert:", authUserId);
       }
 
-      setState((s) => ({
-        ...s,
-        users: s.users.some((existing) => existing.id === newUser.id) ? s.users : [...s.users, newUser],
-        doctors,
-        patients,
-        currentUserId: newUser.id,
-      }));
+      console.log("Inserting profile:", {
+        id: authUserId,
+        email: u.email,
+        role: u.role,
+      });
+      const departmentId = u.department_id && state.departments.some((d) => d.id === u.department_id)
+        ? u.department_id
+        : null;
+
+      if (u.department_id && !departmentId) {
+        throw new Error("Selected department is invalid. Please choose a valid department.");
+      }
+
+      const { data: profileData, error: profileError } = await supabase
+        .from("users")
+        .insert([
+          {
+            id: authUserId,
+            full_name: u.full_name,
+            email: u.email,
+            role: u.role,
+            department_id: departmentId,
+            is_active: u.is_active,
+          },
+        ])
+        .select()
+        .single();
+
+      if (profileError || !profileData) {
+        throw new Error(profileError?.message ?? "Failed to create user profile.");
+      }
+
+      const newUser = profileData as User;
+      const createDoctor = newUser.role === "doctor";
+      const createPatient = newUser.role === "patient";
+
+      setState((s) => {
+        let doctors = s.doctors;
+        let patients = s.patients;
+
+        if (createDoctor) {
+          const doctorRow = {
+            user_id: newUser.id,
+            specialty: [],
+            availability_status: "off_duty",
+            bio: "",
+            active_patient_count: 0,
+          };
+          const doctorData = { ...doctorRow, id: genId("doc") };
+          doctors = [...doctors, { ...newUser, doctor_id: doctorData.id, specialty: doctorRow.specialty, availability_status: doctorRow.availability_status as Doctor["availability_status"], bio: doctorRow.bio, active_patient_count: doctorRow.active_patient_count }];
+          const { error: doctorError } = await supabase
+            .from("doctors")
+            .insert([doctorRow]);
+          if (doctorError) {
+            console.error("Doctor table error:", doctorError);
+            throw new Error(doctorError.message);
+          }
+        }
+
+        if (createPatient) {
+          const patientRow = {
+            user_id: newUser.id,
+            date_of_birth: u.date_of_birth ?? new Date().toISOString().slice(0, 10),
+            blood_type: u.blood_type ?? "O+",
+            emergency_contact: u.emergency_contact ?? "",
+            address: u.address ?? "",
+            symptoms: [],
+            external_reports: [],
+          };
+          const patientData = { ...patientRow, id: genId("pat") };
+          patients = [...patients, { ...newUser, patient_id: patientData.id, date_of_birth: patientRow.date_of_birth, blood_type: patientRow.blood_type, emergency_contact: patientRow.emergency_contact, address: patientRow.address, symptoms: patientRow.symptoms, external_reports: patientRow.external_reports }];
+          const { error: patientError } = await supabase
+            .from("patients")
+            .insert([patientRow]);
+          if (patientError) {
+            console.error("Patient table error:", patientError);
+            throw new Error(patientError.message);
+          }
+        }
+
+        return {
+          ...s,
+          users: s.users.some((existing) => existing.id === newUser.id) ? s.users : [...s.users, newUser],
+          doctors,
+          patients,
+          currentUserId: shouldSignIn && newUser.is_active ? newUser.id : s.currentUserId,
+        };
+      });
 
       return newUser;
     },

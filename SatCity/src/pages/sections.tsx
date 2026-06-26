@@ -36,10 +36,10 @@ function downloadCSV(filename: string, rows: Record<string, any>[]) {
 import { toast } from "../components/ui/primitives";
 
 export function UsersSection() {
-  const { currentUser, users, toggleUserActive, registerUser, deleteUser } = useHospital();
+  const { currentUser, users, departments, toggleUserActive, registerUser, deleteUser } = useHospital();
   const [showAdd, setShowAdd] = useState(false);
   const [roleFilter, setRoleFilter] = useState<string>("all");
-  const [form, setForm] = useState({ full_name: "", email: "", role: "doctor" as Role, department_id: "d-cardio" });
+  const [form, setForm] = useState({ full_name: "", email: "", role: "doctor" as Role, department_id: "" });
 
   if (!currentUser) return null;
   const scope = currentUser.role === "super_admin"
@@ -50,9 +50,13 @@ export function UsersSection() {
 
   const add = () => {
     if (!form.full_name || !form.email) return;
-    registerUser({ ...form, is_active: false });
+    if (form.role !== "pharmacist" && !form.department_id) {
+      toast({ title: "Valid department required", description: "Please select a valid department for this staff role.", variant: "danger" });
+      return;
+    }
+    registerUser({ ...form, is_active: false, department_id: form.role === "pharmacist" ? null : form.department_id });
     setShowAdd(false);
-    setForm({ full_name: "", email: "", role: "doctor", department_id: "d-cardio" });
+    setForm({ full_name: "", email: "", role: "doctor", department_id: departments[0]?.id ?? "" });
   };
 
   return (
@@ -150,10 +154,11 @@ export function UsersSection() {
             <div>
               <Label>Department</Label>
               <Select value={form.department_id} onChange={(e) => setForm({ ...form, department_id: e.target.value })}>
-                <option value="d-cardio">Cardiology</option>
-                <option value="d-neuro">Neurology</option>
-                <option value="d-peds">Pediatrics</option>
-                <option value="d-ortho">Orthopedics</option>
+                {departments.length > 0 ? departments.map((department) => (
+                  <option key={department.id} value={department.id}>{department.name}</option>
+                )) : (
+                  <option value="">No departments available</option>
+                )}
               </Select>
             </div>
           </div>
