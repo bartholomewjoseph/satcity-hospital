@@ -1,262 +1,632 @@
-import React from "react";
+import { createContext, useContext, useState, useEffect, ReactNode } from "react";
+import { supabase } from "./supabase";
 
+// ============ Types ============ 
 export type Role = "super_admin" | "admin" | "doctor" | "lab_tech" | "pharmacist" | "patient";
 
-export type User = {
+export interface User {
   id: string;
   full_name: string;
   email: string;
   role: Role;
-  department_id?: string;
+  department_id: string | null;
   is_active: boolean;
   created_at: string;
-  specialty?: string[];
-  availability_status?: "available" | "busy" | "off-duty";
-  blood_type?: string;
-  date_of_birth?: string;
-  emergency_contact?: string;
-  active_patient_count?: number;
-};
+}
 
-export type Patient = {
-  id: string;
-  user_id: string;
-  full_name: string;
-  age: number;
+export interface Department { id: string; name: string; admin_id: string; }
+
+export interface Doctor extends User {
+  doctor_id: string;
+  specialty: string[];
+  availability_status: "available" | "busy" | "off_duty";
+  bio: string;
+  active_patient_count: number;
+}
+
+export interface Patient extends User {
+  patient_id: string;
+  date_of_birth: string;
   blood_type: string;
-  phone: string;
-  email: string;
   emergency_contact: string;
-  assigned_doctor_id?: string;
-  symptoms: { id: string; text: string; at: string }[];
-  lab_tests_ordered: { id: string; name: string; status: "Pending" | "Results Uploaded" }[];
-  lab_results: { id: string; diagnosed_condition: string; file_name: string; uploaded_by: string; uploaded_at: string }[];
-  treatments: { id: string; illness_type: string; treatment_details: string; basis_type: "lab" | "experience" | "external"; doctor_name: string; doctor_specialty: string; administered_at: string }[];
-  external_reports: { id: string; title: string; file_name: string; uploaded_at: string }[];
-  created_at: string;
-};
+  address: string;
+  symptoms: { id: string; text: string; at: string; lab_test_ordered?: string; lab_test_status?: "Pending" | "Results Uploaded" }[];
+  external_reports: { id: string; name: string; from: string; url: string; uploaded_at: string }[];
+}
 
-export type Drug = {
+type RegisterUserInput = Omit<User, "id" | "created_at"> & Partial<Pick<Patient, "date_of_birth" | "blood_type" | "emergency_contact" | "address" | "symptoms" | "external_reports">>;
+
+export interface LabResult {
+  id: string;
+  patient_id: string;
+  technician_id: string;
+  technician_name: string;
+  diagnosed_condition: string;
+  result_file_url: string;
+  uploaded_at: string;
+}
+
+export interface Treatment {
+  id: string;
+  patient_id: string;
+  doctor_id: string;
+  doctor_name: string;
+  doctor_specialty: string;
+  illness_type: string;
+  treatment_details: string;
+  basis_type: "lab_confirmed" | "doctor_experience" | "external_report";
+  administered_at: string;
+}
+
+export interface Assignment {
+  id: string;
+  patient_id: string;
+  doctor_id: string;
+  assigned_at: string;
+  status: "active" | "resolved";
+}
+
+export interface AmbulanceBooking {
+  id: string;
+  patient_id: string;
+  patient_name: string;
+  type: "scheduled" | "emergency";
+  pickup_location: string;
+  destination: string;
+  scheduled_time: string;
+  reason?: string;
+  caller_name?: string;
+  description?: string;
+  status: "Pending" | "Confirmed" | "En Route" | "Completed" | "Handled";
+  created_at: string;
+  is_resolved?: boolean;
+  handled_by?: string;
+}
+
+export interface Drug {
   id: string;
   sanity_drug_id: string;
   drug_name: string;
   category: string;
   description: string;
+  usage: string;
+  side_effects: string;
   quantity: number;
-  status: "available" | "low" | "out of stock";
+  status: "available" | "low" | "out_of_stock";
   updated_at: string;
-};
+}
 
-export type AmbulanceBooking = {
-  id: string;
-  patient_name: string;
-  type: "scheduled";
-  pickup_location: string;
-  destination: string;
-  scheduled_time: string;
-  reason: string;
-  status: "Pending" | "Confirmed" | "En Route" | "Completed";
-  created_at: string;
-};
-
-export type EmergencyRequest = {
-  id: string;
-  caller_name: string;
-  location: string;
-  description: string;
-  created_at: string;
-  is_resolved: boolean;
-  handled_by?: string;
-};
-
-export type Notification = {
+export interface Notification {
   id: string;
   recipient_id: string;
-  type: "assignment" | "emergency_available_patient" | "info";
+  type: "assignment" | "emergency_available_patient" | "emergency_request";
   message: string;
   specialty_context?: string;
   patient_id?: string;
   is_read: boolean;
+  is_resolved?: boolean;
   created_at: string;
-};
+}
 
-const now = new Date().toISOString();
-
-export const seedUsers: User[] = [
-  { id: "u1", full_name: "Dr. Amelia Carter", email: "super@satcity.hosp", role: "super_admin", is_active: true, created_at: now, specialty: ["Administration"] },
-  { id: "u2", full_name: "Dr. Raj Patel", email: "admin@satcity.hosp", role: "admin", department_id: "d1", is_active: true, created_at: now },
-  { id: "u3", full_name: "Dr. Hannah Lee", email: "doctor@satcity.hosp", role: "doctor", department_id: "d1", is_active: true, created_at: now, specialty: ["Cardiology", "Internal Medicine"], availability_status: "available", active_patient_count: 2 },
-  { id: "u4", full_name: "Dr. Marcus Chen", email: "doctor2@satcity.hosp", role: "doctor", department_id: "d1", is_active: true, created_at: now, specialty: ["Neurology"], availability_status: "busy", active_patient_count: 4 },
-  { id: "u5", full_name: "Dr. Sofia Alvarez", email: "doctor3@satcity.hosp", role: "doctor", department_id: "d2", is_active: true, created_at: now, specialty: ["Pediatrics"], availability_status: "available", active_patient_count: 1 },
-  { id: "u6", full_name: "Tech. Noah Bennett", email: "lab@satcity.hosp", role: "lab_tech", department_id: "d3", is_active: true, created_at: now },
-  { id: "u7", full_name: "Pharm. Iris Quinn", email: "pharmacy@satcity.hosp", role: "pharmacist", department_id: "d4", is_active: true, created_at: now },
-  { id: "u8", full_name: "John Doe", email: "patient@satcity.hosp", role: "patient", is_active: true, created_at: now, blood_type: "O+", date_of_birth: "1990-04-12", emergency_contact: "Jane Doe +1 555 0101" },
-  { id: "u9", full_name: "Emma Wilson", email: "staff-pending@satcity.hosp", role: "doctor", department_id: "d1", is_active: false, created_at: now, specialty: ["Orthopedics"] },
-];
-
-export const seedPatients: Patient[] = [
-  {
-    id: "p1",
-    user_id: "u8",
-    full_name: "John Doe",
-    age: 34,
-    blood_type: "O+",
-    phone: "+1 555 0199",
-    email: "john@example.com",
-    emergency_contact: "Jane Doe +1 555 0101",
-    assigned_doctor_id: "u3",
-    symptoms: [
-      { id: "s1", text: "Chest discomfort on exertion, shortness of breath.", at: "2025-03-12T09:15:00Z" },
-      { id: "s2", text: "Mild dizziness in the evening.", at: "2025-03-14T18:40:00Z" },
-    ],
-    lab_tests_ordered: [
-      { id: "lt1", name: "Complete Blood Count", status: "Results Uploaded" },
-      { id: "lt2", name: "Troponin Level", status: "Results Uploaded" },
-      { id: "lt3", name: "Stress ECG", status: "Pending" },
-    ],
-    lab_results: [
-      { id: "lr1", diagnosed_condition: "Mild Cardiac Ischemia", file_name: "troponin-report.pdf", uploaded_by: "Tech. Noah Bennett", uploaded_at: "2025-03-13T11:20:00Z" },
-    ],
-    treatments: [
-      { id: "t1", illness_type: "Cardiac Ischemia", treatment_details: "Aspirin 75mg OD, lifestyle modification plan, follow-up in 2 weeks.", basis_type: "lab", doctor_name: "Dr. Hannah Lee", doctor_specialty: "Cardiology", administered_at: "2025-03-13T14:00:00Z" },
-      { id: "t2", illness_type: "General fatigue", treatment_details: "Multivitamin supplementation, hydration protocol.", basis_type: "experience", doctor_name: "Dr. Hannah Lee", doctor_specialty: "Cardiology", administered_at: "2025-03-15T10:00:00Z" },
-    ],
-    external_reports: [
-      { id: "er1", title: "External Echocardiogram", file_name: "echo-report-feb.pdf", uploaded_at: "2025-02-22T10:00:00Z" },
-    ],
-    created_at: "2025-03-10T08:00:00Z",
-  },
-  {
-    id: "p2",
-    user_id: "u10",
-    full_name: "Maria Gonzalez",
-    age: 29,
-    blood_type: "A+",
-    phone: "+1 555 0233",
-    email: "maria@example.com",
-    emergency_contact: "Carlos Gonzalez +1 555 0234",
-    assigned_doctor_id: "u3",
-    symptoms: [{ id: "s3", text: "Palpitations and occasional chest tightness.", at: "2025-03-18T08:10:00Z" }],
-    lab_tests_ordered: [{ id: "lt4", name: "Holter Monitor", status: "Pending" }],
-    lab_results: [],
-    treatments: [],
-    external_reports: [],
-    created_at: "2025-03-18T08:00:00Z",
-  },
-  {
-    id: "p3",
-    user_id: "u11",
-    full_name: "Liam O'Connor",
-    age: 58,
-    blood_type: "B-",
-    phone: "+1 555 0444",
-    email: "liam@example.com",
-    emergency_contact: "Maggie O'Connor +1 555 0445",
-    assigned_doctor_id: "u4",
-    symptoms: [{ id: "s4", text: "Severe migraine with aura, blurred vision.", at: "2025-03-20T07:55:00Z" }],
-    lab_tests_ordered: [{ id: "lt5", name: "MRI Brain", status: "Results Uploaded" }],
-    lab_results: [{ id: "lr2", diagnosed_condition: "Classic Migraine", file_name: "mri-brain.pdf", uploaded_by: "Tech. Noah Bennett", uploaded_at: "2025-03-20T12:10:00Z" }],
-    treatments: [{ id: "t3", illness_type: "Migraine", treatment_details: "Sumatriptan 50mg PRN, magnesium supplementation.", basis_type: "external", doctor_name: "Dr. Marcus Chen", doctor_specialty: "Neurology", administered_at: "2025-03-20T15:00:00Z" }],
-    external_reports: [{ id: "er2", title: "Prior CT scan", file_name: "ct-head-2024.pdf", uploaded_at: "2024-11-02T09:00:00Z" }],
-    created_at: "2025-03-20T07:00:00Z",
-  },
-  {
-    id: "p4",
-    user_id: "u12",
-    full_name: "Sophie Laurent",
-    age: 7,
-    blood_type: "AB+",
-    phone: "+1 555 0900",
-    email: "sophie@example.com",
-    emergency_contact: "Pierre Laurent +1 555 0901",
-    assigned_doctor_id: "u5",
-    symptoms: [{ id: "s5", text: "Fever and cough for 3 days.", at: "2025-03-22T08:00:00Z" }],
-    lab_tests_ordered: [{ id: "lt6", name: "CBC + CRP", status: "Results Uploaded" }],
-    lab_results: [{ id: "lr3", diagnosed_condition: "Viral Bronchitis", file_name: "cbc-crp.pdf", uploaded_by: "Tech. Noah Bennett", uploaded_at: "2025-03-22T11:30:00Z" }],
-    treatments: [{ id: "t4", illness_type: "Bronchitis", treatment_details: "Supportive care, fluids, paracetamol.", basis_type: "lab", doctor_name: "Dr. Sofia Alvarez", doctor_specialty: "Pediatrics", administered_at: "2025-03-22T14:00:00Z" }],
-    external_reports: [],
-    created_at: "2025-03-22T07:00:00Z",
-  },
-];
-
-export const seedDrugs: Drug[] = [
-  { id: "dr1", sanity_drug_id: "san-1", drug_name: "Amoxicillin 500mg", category: "Antibiotic", description: "Broad-spectrum penicillin antibiotic.", quantity: 240, status: "available", updated_at: now },
-  { id: "dr2", sanity_drug_id: "san-2", drug_name: "Atorvastatin 20mg", category: "Statin", description: "Lipid-lowering agent.", quantity: 8, status: "low", updated_at: now },
-  { id: "dr3", sanity_drug_id: "san-3", drug_name: "Metformin 500mg", category: "Antidiabetic", description: "Biguanide antihyperglycemic.", quantity: 0, status: "out of stock", updated_at: now },
-  { id: "dr4", sanity_drug_id: "san-4", drug_name: "Omeprazole 20mg", category: "Antacid", description: "Proton pump inhibitor.", quantity: 120, status: "available", updated_at: now },
-  { id: "dr5", sanity_drug_id: "san-5", drug_name: "Aspirin 75mg", category: "Analgesic", description: "Antiplatelet analgesic.", quantity: 500, status: "available", updated_at: now },
-  { id: "dr6", sanity_drug_id: "san-6", drug_name: "Sumatriptan 50mg", category: "Antimigraine", description: "Serotonin agonist.", quantity: 6, status: "low", updated_at: now },
-];
-
-export const seedBookings: AmbulanceBooking[] = [
-  { id: "b1", patient_name: "John Doe", type: "scheduled", pickup_location: "12 Maple St, SatCity", destination: "SatCity Hospital — Main Entrance", scheduled_time: "2025-04-02T09:30:00Z", reason: "Routine cardiology follow-up, requires assistance.", status: "Confirmed", created_at: now },
-  { id: "b2", patient_name: "Maria Gonzalez", type: "scheduled", pickup_location: "44 Cedar Ave, SatCity", destination: "SatCity Hospital — Cardiology Wing", scheduled_time: "2025-04-05T11:00:00Z", reason: "Holter monitor placement.", status: "Pending", created_at: now },
-];
-
-export const seedEmergencies: EmergencyRequest[] = [
-  { id: "e1", caller_name: "Anonymous caller", location: "Intersection of 5th & Main, SatCity", description: "Person down, unresponsive, possible cardiac event.", created_at: "2025-03-28T06:12:00Z", is_resolved: true, handled_by: "Dr. Raj Patel" },
-];
-
-export const seedNotifications: Notification[] = [
-  { id: "n1", recipient_id: "u3", type: "assignment", message: "New patient Maria Gonzalez assigned to you.", specialty_context: "Cardiology", patient_id: "p2", is_read: false, created_at: now },
-];
-
-type Store = {
+// ============ Store ============
+interface HospitalState {
+  currentUserId: string | null;
   users: User[];
+  departments: Department[];
+  doctors: Doctor[];
   patients: Patient[];
+  labResults: LabResult[];
+  treatments: Treatment[];
+  assignments: Assignment[];
+  ambulanceBookings: AmbulanceBooking[];
   drugs: Drug[];
-  bookings: AmbulanceBooking[];
-  emergencies: EmergencyRequest[];
   notifications: Notification[];
-  setUsers: React.Dispatch<React.SetStateAction<User[]>>;
-  setPatients: React.Dispatch<React.SetStateAction<Patient[]>>;
-  setDrugs: React.Dispatch<React.SetStateAction<Drug[]>>;
-  setBookings: React.Dispatch<React.SetStateAction<AmbulanceBooking[]>>;
-  setEmergencies: React.Dispatch<React.SetStateAction<EmergencyRequest[]>>;
-  setNotifications: React.Dispatch<React.SetStateAction<Notification[]>>;
+  labTechs: User[];
+  pharmacists: User[];
+}
+
+interface HospitalContextValue extends HospitalState {
+  currentUser: User | null;
+  currentUserDoctor: Doctor | null;
+  currentUserPatient: Patient | null;
+  login: (email: string) => Promise<boolean>;
+  logout: () => void;
+  registerUser: (u: RegisterUserInput) => Promise<User>;
+  toggleUserActive: (id: string) => void;
+  deleteUser: (id: string) => boolean;
+  updateDoctorStatus: (id: string, status: Doctor["availability_status"]) => void;
+  uploadLabResult: (r: Omit<LabResult, "id" | "uploaded_at">) => void;
+  addTreatment: (t: Omit<Treatment, "id" | "administered_at">) => void;
+  bookAmbulance: (b: Omit<AmbulanceBooking, "id" | "created_at" | "status">) => void;
+  submitEmergency: (b: Omit<AmbulanceBooking, "id" | "created_at" | "status" | "patient_id" | "patient_name" | "type" | "destination" | "scheduled_time">) => void;
+  updateBookingStatus: (id: string, status: AmbulanceBooking["status"]) => void;
+  addDrug: (d: Omit<Drug, "id" | "updated_at" | "status" | "sanity_drug_id">) => void;
+  updateDrugQty: (id: string, qty: number) => void;
+  markNotificationRead: (id: string) => void;
+  acceptEmergency: (notifId: string, doctorId: string) => void;
+}
+
+const HospitalContext = createContext<HospitalContextValue | null>(null);
+
+const genId = (p: string) => `${p}-${Math.random().toString(36).slice(2, 8)}`;
+
+const initialHospitalState: HospitalState = {
+  currentUserId: null,
+  users: [],
+  departments: [],
+  doctors: [],
+  patients: [],
+  labResults: [],
+  treatments: [],
+  assignments: [],
+  ambulanceBookings: [],
+  drugs: [],
+  notifications: [],
+  labTechs: [],
+  pharmacists: [],
 };
 
-const StoreContext = React.createContext<Store | null>(null);
+export function HospitalProvider({ children }: { children: ReactNode }) {
+  const [state, setState] = useState<HospitalState>(initialHospitalState);
 
-const STORAGE_KEY = "satcity_store_v1";
+  // Persist current user to localStorage
+  useEffect(() => {
+    const saved = localStorage.getItem("satcity_current_user");
+    if (saved) setState((s) => ({ ...s, currentUserId: saved }));
+  }, []);
+  useEffect(() => {
+    if (state.currentUserId) localStorage.setItem("satcity_current_user", state.currentUserId);
+    else localStorage.removeItem("satcity_current_user");
+  }, [state.currentUserId]);
 
-function loadInitial<T>(key: string, seed: T): T {
-  try {
-    const raw = localStorage.getItem(`${STORAGE_KEY}_${key}`);
-    if (!raw) return seed;
-    return JSON.parse(raw) as T;
-  } catch {
-    return seed;
-  }
+  useEffect(() => {
+    const loadData = async () => {
+      const [usersRes, depsRes, doctorsRes, patientsRes, labResultsRes, treatmentsRes, assignmentsRes, bookingsRes, drugsRes, notificationsRes] = await Promise.all([
+        supabase.from("users").select("*"),
+        supabase.from("departments").select("*"),
+        supabase.from("doctors").select("*"),
+        supabase.from("patients").select("*"),
+        supabase.from("lab_results").select("*"),
+        supabase.from("treatments").select("*"),
+        supabase.from("patient_doctor_assignments").select("*"),
+        supabase.from("ambulance_bookings").select("*"),
+        supabase.from("drug_inventory").select("*"),
+        supabase.from("notifications").select("*"),
+      ]);
+
+      const error = usersRes.error ?? depsRes.error ?? doctorsRes.error ?? patientsRes.error ?? labResultsRes.error ?? treatmentsRes.error ?? assignmentsRes.error ?? bookingsRes.error ?? drugsRes.error ?? notificationsRes.error;
+      if (error) {
+        console.error("Supabase load error", error);
+        return;
+      }
+
+      const users = usersRes.data ?? [];
+      const usersById = new Map(users.map((u) => [u.id, u]));
+      const doctorRows = doctorsRes.data ?? [];
+      const patientRows = patientsRes.data ?? [];
+      const patientRowIdToUserId = new Map(patientRows.map((p) => [p.id, p.user_id]));
+      const doctorRowIdToUserId = new Map(doctorRows.map((d) => [d.id, d.user_id]));
+
+      const doctors = doctorRows
+        .map((doc) => {
+          const user = usersById.get(doc.user_id);
+          if (!user) return null;
+          return {
+            ...user,
+            doctor_id: doc.id,
+            specialty: doc.specialty ?? [],
+            availability_status: doc.availability_status as Doctor["availability_status"],
+            bio: doc.bio ?? "",
+            active_patient_count: doc.active_patient_count ?? 0,
+          } as Doctor;
+        })
+        .filter((d): d is Doctor => d !== null);
+
+      const patients = patientRows
+        .map((pat) => {
+          const user = usersById.get(pat.user_id);
+          if (!user) return null;
+          return {
+            ...user,
+            patient_id: pat.id,
+            date_of_birth: pat.date_of_birth,
+            blood_type: pat.blood_type,
+            emergency_contact: pat.emergency_contact ?? "",
+            address: pat.address ?? "",
+            symptoms: pat.symptoms ?? [],
+            external_reports: pat.external_reports ?? [],
+          } as Patient;
+        })
+        .filter((p): p is Patient => p !== null);
+
+      const labResults = (labResultsRes.data ?? []).map((row) => {
+        const technician = usersById.get(row.technician_id);
+        return {
+          ...row,
+          patient_id: patientRowIdToUserId.get(row.patient_id) ?? row.patient_id,
+          technician_name: technician?.full_name ?? "",
+          uploaded_at: row.uploaded_at,
+        } as LabResult;
+      });
+
+      const treatments = (treatmentsRes.data ?? []).map((row) => {
+        const doctorUser = usersById.get(row.doctor_id);
+        const doctorUserRecord = doctors.find((d) => d.id === row.doctor_id);
+        return {
+          ...row,
+          doctor_name: doctorUser?.full_name ?? "",
+          doctor_specialty: doctorUserRecord?.specialty?.[0] ?? "",
+        } as Treatment;
+      });
+
+      const assignments = (assignmentsRes.data ?? []).map((row) => ({
+        ...row,
+        patient_id: patientRowIdToUserId.get(row.patient_id) ?? row.patient_id,
+        doctor_id: doctorRowIdToUserId.get(row.doctor_id) ?? row.doctor_id,
+      })) as Assignment[];
+
+      const bookings = bookingsRes.data ?? [];
+      const drugs = drugsRes.data ?? [];
+      const notifications = (notificationsRes.data ?? []).map((row) => ({
+        ...row,
+        patient_id: patientRowIdToUserId.get(row.patient_id) ?? row.patient_id,
+      })) as Notification[];
+
+      setState((s) => ({
+        ...s,
+        users,
+        departments: depsRes.data ?? [],
+        doctors,
+        patients,
+        labResults,
+        treatments,
+        assignments,
+        ambulanceBookings: bookings,
+        drugs,
+        notifications,
+        labTechs: users.filter((u) => u.role === "lab_tech"),
+        pharmacists: users.filter((u) => u.role === "pharmacist"),
+      }));
+    };
+
+    loadData();
+  }, []);
+
+  const currentUser = state.users.find((u) => u.id === state.currentUserId) ?? null;
+  const currentUserDoctor = currentUser?.role === "doctor" ? state.doctors.find((d) => d.id === currentUser.id) ?? null : null;
+  const currentUserPatient = currentUser?.role === "patient" ? state.patients.find((p) => p.id === currentUser.id) ?? null : null;
+
+  // Smart-assignment helper (simulates Edge Function: assign-patient-to-doctor)
+  const runSmartAssignment = (lab: LabResult, st: HospitalState): HospitalState => {
+    const matchedDoctors = st.doctors.filter((d) =>
+      d.specialty.some((s) => s.toLowerCase().includes(lab.diagnosed_condition.toLowerCase()) ||
+                             lab.diagnosed_condition.toLowerCase().includes(s.toLowerCase()))
+    );
+    const available = matchedDoctors.filter((d) => d.availability_status === "available");
+    const notifs: Notification[] = [...st.notifications];
+    const assignments = [...st.assignments];
+
+    if (available.length > 0) {
+      const target = [...available].sort((a, b) => a.active_patient_count - b.active_patient_count)[0];
+      assignments.push({ id: genId("a"), patient_id: lab.patient_id, doctor_id: target.id, assigned_at: new Date().toISOString(), status: "active" });
+      const pat = st.patients.find((p) => p.id === lab.patient_id);
+      notifs.push({
+        id: genId("n"),
+        recipient_id: target.id,
+        type: "assignment",
+        message: `You have been assigned a new patient: ${pat?.full_name ?? "Unknown"} (${lab.diagnosed_condition}).`,
+        patient_id: lab.patient_id,
+        is_read: false,
+        created_at: new Date().toISOString(),
+      });
+      const doctors = st.doctors.map((d) =>
+        d.id === target.id ? { ...d, active_patient_count: d.active_patient_count + 1 } : d
+      );
+      return { ...st, assignments, notifications: notifs, doctors };
+    } else if (matchedDoctors.length > 0) {
+      matchedDoctors.forEach((d) => {
+        const pat = st.patients.find((p) => p.id === lab.patient_id);
+        notifs.push({
+          id: genId("n"),
+          recipient_id: d.id,
+          type: "emergency_available_patient",
+          message: `Unassigned patient with ${lab.diagnosed_condition} is awaiting a specialist. Accept to assign.`,
+          specialty_context: d.specialty[0],
+          patient_id: lab.patient_id,
+          is_read: false,
+          is_resolved: false,
+          created_at: new Date().toISOString(),
+        });
+        void pat;
+      });
+      return { ...st, notifications: notifs };
+    }
+    return st;
+  };
+
+  const value: HospitalContextValue = {
+    ...state,
+    currentUser,
+    currentUserDoctor,
+    currentUserPatient,
+
+    login: async (email) => {
+      const { data, error } = await supabase.from("users").select("*").eq("email", email).single();
+      if (error || !data || !data.is_active) return false;
+      const user = data as User;
+      setState((s) => ({
+        ...s,
+        currentUserId: user.id,
+        users: s.users.some((u) => u.id === user.id) ? s.users : [...s.users, user],
+      }));
+      return true;
+    },
+    logout: () => setState((s) => ({ ...s, currentUserId: null })),
+
+    registerUser: async (u) => {
+      const { data, error } = await supabase.from("users").insert([{ ...u }]).select().single();
+      if (error || !data) {
+        throw new Error(error?.message ?? "Registration failed.");
+      }
+      const newUser = data as User;
+      let doctors = state.doctors;
+      let patients = state.patients;
+
+      if (newUser.role === "doctor") {
+        const { data: doctorData, error: doctorError } = await supabase
+          .from("doctors")
+          .insert([{ user_id: newUser.id, specialty: [], availability_status: "off_duty", bio: "", active_patient_count: 0 }])
+          .select()
+          .single();
+        if (!doctorError && doctorData) {
+          doctors = [
+            ...doctors,
+            {
+              ...newUser,
+              doctor_id: doctorData.id,
+              specialty: doctorData.specialty ?? [],
+              availability_status: doctorData.availability_status as Doctor["availability_status"],
+              bio: doctorData.bio ?? "",
+              active_patient_count: doctorData.active_patient_count ?? 0,
+            },
+          ];
+        }
+      }
+
+      if (newUser.role === "patient") {
+        const { data: patientData, error: patientError } = await supabase
+          .from("patients")
+          .insert([
+            {
+              user_id: newUser.id,
+              date_of_birth: u.date_of_birth ?? new Date().toISOString().slice(0, 10),
+              blood_type: u.blood_type ?? "O+",
+              emergency_contact: u.emergency_contact ?? "",
+              address: u.address ?? "",
+              symptoms: [],
+              external_reports: [],
+            },
+          ])
+          .select()
+          .single();
+        if (!patientError && patientData) {
+          patients = [
+            ...patients,
+            {
+              ...newUser,
+              patient_id: patientData.id,
+              date_of_birth: patientData.date_of_birth,
+              blood_type: patientData.blood_type,
+              emergency_contact: patientData.emergency_contact ?? "",
+              address: patientData.address ?? "",
+              symptoms: patientData.symptoms ?? [],
+              external_reports: patientData.external_reports ?? [],
+            },
+          ];
+        }
+      }
+
+      setState((s) => ({
+        ...s,
+        users: s.users.some((existing) => existing.id === newUser.id) ? s.users : [...s.users, newUser],
+        doctors,
+        patients,
+        currentUserId: newUser.id,
+      }));
+
+      return newUser;
+    },
+
+    toggleUserActive: (id) => {
+      setState((s) => ({ ...s, users: s.users.map((u) => (u.id === id ? { ...u, is_active: !u.is_active } : u)) }));
+    },
+
+    deleteUser: (id) => {
+      // Only super admin can delete. Returns true if deleted.
+      let deleted = false;
+      setState((s) => {
+        const requester = s.users.find((u) => u.id === s.currentUserId);
+        if (!requester || requester.role !== "super_admin") return s;
+        // Prevent deleting yourself
+        if (id === requester.id) return s;
+        deleted = true;
+        // Cascade: remove from all related tables
+        const users = s.users.filter((u) => u.id !== id);
+        const doctors = s.doctors.filter((d) => d.id !== id);
+        const patients = s.patients.filter((p) => p.id !== id);
+        const assignments = s.assignments.filter((a) => a.patient_id !== id && a.doctor_id !== id);
+        const labResults = s.labResults.filter((l) => l.patient_id !== id && l.technician_id !== id);
+        const treatments = s.treatments.filter((t) => t.patient_id !== id && t.doctor_id !== id);
+        const notifications = s.notifications.filter((n) => n.recipient_id !== id);
+        const ambulanceBookings = s.ambulanceBookings.filter((b) => b.patient_id !== id);
+        return { ...s, users, doctors, patients, assignments, labResults, treatments, notifications, ambulanceBookings };
+      });
+      return deleted;
+    },
+
+    updateDoctorStatus: (id, status) => {
+      setState((s) => {
+        const doctors = s.doctors.map((d) => (d.id === id ? { ...d, availability_status: status } : d));
+        let next = { ...s, doctors };
+        // check-available-doctors edge function
+        if (status === "available") {
+          const doc = next.doctors.find((d) => d.id === id);
+          if (doc) {
+            const waiting = next.notifications.filter(
+              (n) => n.type === "emergency_available_patient" && !n.is_resolved &&
+                doc.specialty.some((sp) => (n.specialty_context ?? "").toLowerCase() === sp.toLowerCase())
+            );
+            if (waiting.length > 0) {
+              const first = waiting[0];
+              if (first.patient_id) {
+                next.assignments = [...next.assignments, { id: genId("a"), patient_id: first.patient_id, doctor_id: id, assigned_at: new Date().toISOString(), status: "active" }];
+                next.doctors = next.doctors.map((d) => (d.id === id ? { ...d, active_patient_count: d.active_patient_count + 1 } : d));
+              }
+              // resolve all emergency notifications of same specialty for same patient
+              next.notifications = next.notifications.map((n) => {
+                if (n.type === "emergency_available_patient" && n.patient_id === first.patient_id) return { ...n, is_resolved: true, is_read: true };
+                return n;
+              });
+              const pat = next.patients.find((p) => p.id === first.patient_id);
+              next.notifications = [...next.notifications, {
+                id: genId("n"),
+                recipient_id: id,
+                type: "assignment",
+                message: `Auto-assigned emergency patient: ${pat?.full_name ?? "Unknown"}.`,
+                patient_id: first.patient_id,
+                is_read: false,
+                created_at: new Date().toISOString(),
+              }];
+            }
+          }
+        }
+        return next;
+      });
+    },
+
+    uploadLabResult: (r) => {
+      setState((s) => {
+        const newResult: LabResult = { ...r, id: genId("lr"), uploaded_at: new Date().toISOString() };
+        const labResults = [...s.labResults, newResult];
+        // update patient symptom status
+        const patients = s.patients.map((p) => {
+          if (p.id !== r.patient_id) return p;
+          return { ...p, symptoms: p.symptoms.map((sy) => sy.lab_test_ordered ? { ...sy, lab_test_status: "Results Uploaded" as const } : sy) };
+        });
+        // run smart assignment edge function
+        const withAssignment = runSmartAssignment(newResult, { ...s, labResults, patients });
+        return withAssignment;
+      });
+    },
+
+    addTreatment: (t) => {
+      setState((s) => ({
+        ...s,
+        treatments: [...s.treatments, { ...t, id: genId("t"), administered_at: new Date().toISOString() }],
+      }));
+    },
+
+    bookAmbulance: (b) => {
+      setState((s) => ({
+        ...s,
+        ambulanceBookings: [...s.ambulanceBookings, { ...b, id: genId("ab"), created_at: new Date().toISOString(), status: "Pending" }],
+      }));
+    },
+
+    submitEmergency: (b) => {
+      setState((s) => {
+        const booking: AmbulanceBooking = {
+          id: genId("ab"),
+          patient_id: "public-" + genId("p"),
+          patient_name: b.caller_name ?? "Anonymous",
+          type: "emergency",
+          pickup_location: b.pickup_location,
+          destination: "SatCity Hospital",
+          scheduled_time: new Date().toISOString(),
+          caller_name: b.caller_name,
+          description: b.description,
+          status: "Pending",
+          created_at: new Date().toISOString(),
+          is_resolved: false,
+        };
+        // notify all admins (simulate notify-emergency-admins edge function)
+        const adminIds = s.users.filter((u) => u.role === "admin" || u.role === "super_admin").map((u) => u.id);
+        const notifications = [
+          ...s.notifications,
+          ...adminIds.map((id) => ({
+            id: genId("n"),
+            recipient_id: id,
+            type: "emergency_request" as const,
+            message: `Emergency ambulance request from ${b.caller_name ?? "Anonymous"} at ${b.pickup_location}.`,
+            is_read: false,
+            is_resolved: false,
+            created_at: new Date().toISOString(),
+          })),
+        ];
+        return { ...s, ambulanceBookings: [...s.ambulanceBookings, booking], notifications };
+      });
+    },
+
+    updateBookingStatus: (id, status) => {
+      setState((s) => ({
+        ...s,
+        ambulanceBookings: s.ambulanceBookings.map((b) =>
+          b.id === id ? { ...b, status, ...(status === "Handled" || status === "Completed" ? { is_resolved: true } : {}) } : b
+        ),
+      }));
+    },
+
+    addDrug: (d) => {
+      setState((s) => {
+        const status: Drug["status"] = d.quantity === 0 ? "out_of_stock" : d.quantity < 10 ? "low" : "available";
+        return {
+          ...s,
+          drugs: [...s.drugs, { ...d, id: genId("dr"), sanity_drug_id: "s-" + genId("dr"), status, updated_at: new Date().toISOString() }],
+        };
+      });
+    },
+
+    updateDrugQty: (id, qty) => {
+      setState((s) => {
+        const status: Drug["status"] = qty === 0 ? "out_of_stock" : qty < 10 ? "low" : "available";
+        return { ...s, drugs: s.drugs.map((d) => (d.id === id ? { ...d, quantity: qty, status, updated_at: new Date().toISOString() } : d)) };
+      });
+    },
+
+    markNotificationRead: (id) => {
+      setState((s) => ({ ...s, notifications: s.notifications.map((n) => (n.id === id ? { ...n, is_read: true } : n)) }));
+    },
+
+    acceptEmergency: (notifId, doctorId) => {
+      setState((s) => {
+        const notif = s.notifications.find((n) => n.id === notifId);
+        if (!notif || !notif.patient_id) return s;
+        const assignments = [...s.assignments, { id: genId("a"), patient_id: notif.patient_id, doctor_id: doctorId, assigned_at: new Date().toISOString(), status: "active" as const }];
+        const doctors = s.doctors.map((d) => (d.id === doctorId ? { ...d, active_patient_count: d.active_patient_count + 1 } : d));
+        const notifications = s.notifications.map((n) => {
+          if (n.type === "emergency_available_patient" && n.patient_id === notif.patient_id) return { ...n, is_resolved: true, is_read: true };
+          return n;
+        });
+        const pat = s.patients.find((p) => p.id === notif.patient_id);
+        notifications.push({
+          id: genId("n"),
+          recipient_id: doctorId,
+          type: "assignment",
+          message: `You accepted emergency patient: ${pat?.full_name ?? "Unknown"}.`,
+          patient_id: notif.patient_id,
+          is_read: false,
+          created_at: new Date().toISOString(),
+        });
+        return { ...s, assignments, doctors, notifications };
+      });
+    },
+  };
+
+  return <HospitalContext.Provider value={value}>{children}</HospitalContext.Provider>;
 }
 
-function usePersistedState<T>(key: string, seed: T): [T, React.Dispatch<React.SetStateAction<T>>] {
-  const [state, setState] = React.useState<T>(() => loadInitial(key, seed));
-  React.useEffect(() => {
-    try {
-      localStorage.setItem(`${STORAGE_KEY}_${key}`, JSON.stringify(state));
-    } catch {}
-  }, [key, state]);
-  return [state, setState];
-}
-
-export function StoreProvider({ children }: { children: React.ReactNode }) {
-  const [users, setUsers] = usePersistedState("users", seedUsers);
-  const [patients, setPatients] = usePersistedState("patients", seedPatients);
-  const [drugs, setDrugs] = usePersistedState("drugs", seedDrugs);
-  const [bookings, setBookings] = usePersistedState("bookings", seedBookings);
-  const [emergencies, setEmergencies] = usePersistedState("emergencies", seedEmergencies);
-  const [notifications, setNotifications] = usePersistedState("notifications", seedNotifications);
-
-  return (
-    <StoreContext.Provider value={{ users, patients, drugs, bookings, emergencies, notifications, setUsers, setPatients, setDrugs, setBookings, setEmergencies, setNotifications }}>
-      {children}
-    </StoreContext.Provider>
-  );
-}
-
-export function useStore() {
-  const ctx = React.useContext(StoreContext);
-  if (!ctx) throw new Error("useStore must be used inside StoreProvider");
+export function useHospital() {
+  const ctx = useContext(HospitalContext);
+  if (!ctx) throw new Error("useHospital must be used within HospitalProvider");
   return ctx;
 }
